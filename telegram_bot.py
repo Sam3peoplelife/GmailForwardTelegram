@@ -1,49 +1,65 @@
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, JobQueue
-from gmail_checker import authenticate_gmail, check_new_emails
+from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from gmail_checker import get_auth_url, exchange_code_for_token, check_new_emails
 import dotenv
+import pickle
+import os
 
-# Telegram bot settings
 TELEGRAM_TOKEN = dotenv.get_key('.env', 'TELEGRAM_API_TOKEN')
-CHAT_ID = dotenv.get_key('.env', 'TELEGRAM_CHAT_ID')
-whiteListSender = []
-blackListSender = []
-whiteListSubject = []
-blackListSubject = []
-interval = 60  # Default interval in seconds
-FIRST_RUN = True
+interval = 60
 
-async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
-    """Check for new emails and send notifications to Telegram."""
-    global FIRST_RUN
-    new_emails = check_new_emails()
-    if not new_emails:
-        return
-    if FIRST_RUN:
-        FIRST_RUN = False
-        return
-    
-    for email in new_emails:
-        if (whiteListSender and email['sender'] not in whiteListSender) or (email['sender'] in blackListSender):
-            continue
-        if (whiteListSubject and email['subject'] not in whiteListSubject) or (email['subject'] in blackListSubject):
-            continue
-        await context.bot.send_message(
-            chat_id=CHAT_ID,
-            text=f"New email!\nFrom: {email['sender']}\nSubject: {email['subject']}"
-        )
+user_data = {}
+
+def save_user_data():
+    with open("user_data.pkl", "wb") as f:
+        pickle.dump(user_data, f)
+
+def load_user_data():
+    global user_data
+    if os.path.exists("user_data.pkl"):
+        with open("user_data.pkl", "rb") as f:
+            user_data = pickle.load(f)
+    else:
+        user_data = {}
+
+def get_user_lists(user_id):
+    # Ensure user data exists
+    if user_id not in user_data:
+        user_data[user_id] = {
+            "whiteListSender": [],
+            "blackListSender": [],
+            "whiteListSubject": [],
+            "blackListSubject": [],
+            "token": None,
+            "last_checked_id": None,
+            "first_run": True
+        }
+    return user_data[user_id]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for /start command."""
-    await update.message.reply_text("Bot started! Checking your Gmail.")
-    await update.message.reply_text("Use /blacklistsender or /whitelistsender to manage your email filters.\n"
-                                    "Use /blacklistsubject or /whitelistsubject to manage subject filters.\n"
-                                    "Use /setinterval <seconds> to change the checking interval.\n"
-                                    "Example: /blacklistsender blacklist@gmail.com")
-    # Set up periodic checking
-    if context.job_queue is None:
-        raise ValueError("JobQueue is not initialized.")
-    context.job_queue.run_repeating(check_and_notify, interval=interval, first=0)
+    user_id = update.effective_user.id
+    get_user_lists(user_id)  # Ensure user data exists
+    auth_url = get_auth_url(user_id)
+    await update.message.reply_text(
+        "Welcome! Please authenticate with Google:\n" + auth_url +
+        "\nAfter authorizing, paste the code you receive here."
+    )
+    await update.message.reply_text("/authCode <code> to authenticate with Google.\n")
+
+async def handle_auth_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    code = update.message.text.split(' ', 1)[1] if ' ' in update.message.text else None
+    try:
+        token = exchange_code_for_token(code, user_id)
+        user_data[user_id]["token"] = token
+        save_user_data()
+        await update.message.reply_text("Google authentication successful! You will now receive notifications.\n"
+                                        "You can manage your filters after authentication:\n"
+                                        "/blacklistsender <email>\n/whitelistsender <email>\n"
+                                        "/blacklistsubject <subject>\n/whitelistsubject <subject>\n"
+                                        "/setinterval <seconds>")
+    except Exception as e:
+        await update.message.reply_text(f"Authentication failed: {e}")
 
 async def handle_list_command(
     update: Update,
@@ -52,7 +68,6 @@ async def handle_list_command(
     list_name: str,
     item_type: str
 ):
-    """Generic handler for blacklist/whitelist commands."""
     if len(user_input.split()) < 2:
         if not list_ref:
             await update.message.reply_text(f"No {item_type}s in the {list_name}. You can add one now.")
@@ -60,51 +75,51 @@ async def handle_list_command(
             await update.message.reply_text(f"Current {list_name}: {', '.join(list_ref)}")
         await update.message.reply_text(f"Please send the {item_type} to add to the {list_name}.")
     else:
-        item = user_input.split()[1]
-        list_ref.append(item)
-        await update.message.reply_text(f"Added '{item}' to {list_name}.")
+        item = user_input.split(' ', 1)[1]
+        if item not in list_ref:
+            list_ref.append(item)
+            await update.message.reply_text(f"Added '{item}' to {list_name}.")
+            save_user_data()
+        else:
+            await update.message.reply_text(f"'{item}' is already in {list_name}.")
 
 async def user_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for user input to add senders/subjects to blacklist/whitelist."""
     if not update.message or not update.message.text:
         return
-    user_input = update.message.text
-    if user_input.startswith("/blacklistsender"):
-        await handle_list_command(update, user_input, blackListSender, "blacklist", "sender's email")
+    user_id = update.effective_user.id
+    user_lists = get_user_lists(user_id)
+    user_input = update.message.text.strip()
+    is_authenticated = user_lists.get("token") is not None
+
+    # If not authenticated, only allow /authCode
+    if not is_authenticated:
+        if user_input.startswith("/authCode"):
+            await handle_auth_code(update, context)
+        else:
+            await update.message.reply_text(
+                "You must authenticate first. Use /authCode <code> to authenticate with Google."
+            )
+        return
+
+    # If authenticated, block /start and /authCode
+    if user_input.startswith("/start"):
+        await update.message.reply_text("You are already authenticated. Use filter commands or /setinterval.")
+    elif user_input.startswith("/authCode"):
+        await update.message.reply_text("You are already authenticated. No need to use /authCode again.")
+    elif user_input.startswith("/blacklistsender"):
+        await handle_list_command(update, user_input, user_lists["blackListSender"], "blacklist", "sender's email")
     elif user_input.startswith("/whitelistsender"):
-        await handle_list_command(update, user_input, whiteListSender, "whitelist", "sender's email")
+        await handle_list_command(update, user_input, user_lists["whiteListSender"], "whitelist", "sender's email")
     elif user_input.startswith("/blacklistsubject"):
-        await handle_list_command(update, user_input, blackListSubject, "blacklist", "subject")
+        await handle_list_command(update, user_input, user_lists["blackListSubject"], "blacklist", "subject")
     elif user_input.startswith("/whitelistsubject"):
-        await handle_list_command(update, user_input, whiteListSubject, "whitelist", "subject")
+        await handle_list_command(update, user_input, user_lists["whiteListSubject"], "whitelist", "subject")
     else:
         await update.message.reply_text(
-            "Invalid command. Use /blacklistsender or /whitelistsender for senders, "
-            "/blacklistsubject or /whitelistsubject for subjects."
+            "Invalid command. Use /blacklistsender, /whitelistsender, /blacklistsubject, /whitelistsubject, or /setinterval."
         )
 
-async def blacklistsender(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for adding a sender to the blacklist."""
-    await update.message.reply_text("Please send the sender's email to add to the blacklist.")
-    await user_input_handler(update, context)
-
-async def whitelistsender(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for adding a sender to the whitelist."""
-    await update.message.reply_text("Please send the sender's email to add to the whitelist.")
-    await user_input_handler(update, context)
-
-async def whitelistsubject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for adding a subject to the whitelist."""
-    await update.message.reply_text("Please send the subject to add to the whitelist.")
-    await user_input_handler(update, context)
-
-async def blacklistsubject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for adding a subject to the blacklist."""
-    await update.message.reply_text("Please send the subject to add to the blacklist.")
-    await user_input_handler(update, context)
-
 async def interval_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for changing the interval of email checks."""
     global interval
     try:
         new_interval = int(update.message.text.split()[1])
@@ -115,19 +130,44 @@ async def interval_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (IndexError, ValueError):
         await update.message.reply_text("Usage: /setinterval <seconds> (must be a positive integer)")
 
+async def check_and_notify(context: ContextTypes.DEFAULT_TYPE):
+    for user_id, data in user_data.items():
+        token = data.get("token")
+        if not token:
+            continue
+        try:
+            new_emails, last_id = check_new_emails(token, data.get("last_checked_id"))
+            data["last_checked_id"] = last_id
+
+            # Skip notifications if this is the first run for the user
+            if data.get("first_run", False):
+                data["first_run"] = False
+                continue
+            
+            if not new_emails:
+                continue
+            for email in new_emails:
+                if (data["whiteListSender"] and email['sender'] not in data["whiteListSender"]) or (email['sender'] in data["blackListSender"]):
+                    continue
+                if (data["whiteListSubject"] and email['subject'] not in data["whiteListSubject"]) or (email['subject'] in data["blackListSubject"]):
+                    continue
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"New email!\nFrom: {email['sender']}\nSubject: {email['subject']}"
+                )
+        except Exception as e:
+            await context.bot.send_message(chat_id=user_id, text=f"Error checking your Gmail: {e}")
+    save_user_data()
+
 def main():
-    """Main function to run the bot."""
+    load_user_data()
     application = Application.builder().token(TELEGRAM_TOKEN).build()
-        
-    # Add handler for /start command
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("blacklistsender", blacklistsender))
-    application.add_handler(CommandHandler("whitelistsender", whitelistsender))
-    application.add_handler(CommandHandler("whitelistsubject", whitelistsubject))
-    application.add_handler(CommandHandler("blacklistsubject", blacklistsubject))
     application.add_handler(CommandHandler("setinterval", interval_change))
-    
-    # Run the bot
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, user_input_handler))
+    application.add_handler(MessageHandler(filters.COMMAND, user_input_handler))
+    job_queue = application.job_queue
+    job_queue.run_repeating(check_and_notify, interval=interval, first=5)
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':

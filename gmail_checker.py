@@ -3,52 +3,40 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+import json
 
-# Settings for Gmail API
 SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
-LAST_CHECKED_ID = None
 
-def authenticate_gmail():
-    """Authenticate for Gmail API."""
-    creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
-            token.write(creds.to_json())
-    return creds
+def get_auth_url(user_id):
+    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES, redirect_uri='urn:ietf:wg:oauth:2.0:oob')
+    auth_url, _ = flow.authorization_url(prompt='consent')
+    # Store flow for this user if you want to support web callback
+    return auth_url
 
-def check_new_emails():
-    """Check for new messages in Gmail. Returns a list of new messages."""
-    global LAST_CHECKED_ID
-    creds = authenticate_gmail()
+def exchange_code_for_token(code, user_id):
+    flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES, redirect_uri='urn:ietf:wg:oauth:2.0:oob')
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    # Return as dict for serialization
+    return json.loads(creds.to_json())
+
+def check_new_emails(token_dict, last_checked_id=None):
+    creds = Credentials.from_authorized_user_info(token_dict, SCOPES)
     service = build('gmail', 'v1', credentials=creds)
-    
-    # Get list of messages
     results = service.users().messages().list(userId='me', labelIds=['INBOX'], maxResults=10).execute()
     messages = results.get('messages', [])
-    
     new_emails = []
+    new_last_id = last_checked_id
     if not messages:
-        return new_emails
-    
-    # Check for new messages
+        return new_emails, last_checked_id
     for message in messages:
         msg_id = message['id']
-        if LAST_CHECKED_ID is None or msg_id > LAST_CHECKED_ID:
+        if last_checked_id is None or msg_id > last_checked_id:
             msg = service.users().messages().get(userId='me', id=msg_id, format='full').execute()
             headers = msg['payload']['headers']
-            sender = next(header['value'] for header in headers if header['name'] == 'From')
-            subject = next(header['value'] for header in headers if header['name'] == 'Subject')
+            sender = next((header['value'] for header in headers if header['name'] == 'From'), '')
+            subject = next((header['value'] for header in headers if header['name'] == 'Subject'), '')
             new_emails.append({'sender': sender, 'subject': subject})
-    
-    # Update the last checked ID
-    if messages:
-        LAST_CHECKED_ID = messages[0]['id']
-    
-    return new_emails
+            if new_last_id is None or msg_id > new_last_id:
+                new_last_id = msg_id
+    return new_emails, new_last_id
