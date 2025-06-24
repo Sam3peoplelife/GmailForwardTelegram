@@ -46,78 +46,79 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.job_queue.run_repeating(check_and_notify, interval=interval, first=0)
 
 async def user_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Generic handler for user input."""
+    """Handler for user input to add senders to blacklist or whitelist."""
+    if not update.message or not update.message.text:
+        return
     user_input = update.message.text
     if not user_input:
         return
-
-    # Check if the input is a valid email address
-    if "@" in user_input and "." in user_input:
-        if update.message.text.startswith("/blacklistsender"):
-            blackListSender.append(user_input.split()[1])
-            response = f"Added {user_input.split()[1]} to blacklist."
-        elif update.message.text.startswith("/whitelistsender"):
-            whiteListSender.append(user_input.split()[1])
-            response = f"Added {user_input.split()[1]} to whitelist."
+    if user_input.startswith("/blacklistsender"):
+        if len(user_input.split()) < 2:
+            if not blackListSender:
+                await update.message.reply_text("No senders in the blacklist. You can add one now.")
+            else:
+                await update.message.reply_text(f"Current blacklist: {', '.join(blackListSender)}")
+            await update.message.reply_text("Please send the sender's email to add to the blacklist.")
         else:
-            response = "Invalid command. Use /blacklistsender or /whitelistsender."
+            email = user_input.split()[1]
+            blackListSender.append(email)
+            await update.message.reply_text(f"Added {email} to blacklist.")
+    elif user_input.startswith("/whitelistsender"):
+        if len(user_input.split()) < 2:
+            if not whiteListSender:
+                await update.message.reply_text("No senders in the whitelist. You can add one now.")
+            else:
+                await update.message.reply_text(f"Current whitelist: {', '.join(whiteListSender)}")
+            await update.message.reply_text("Please send the sender's email to add to the whitelist.")
+        else:
+            email = user_input.split()[1]
+            whiteListSender.append(email)
+            await update.message.reply_text(f"Added {email} to whitelist.")
+    elif user_input.startswith("/blacklistsubject"):
+        if len(user_input.split()) < 2:
+            if not blackListSubject:
+                await update.message.reply_text("No subjects in the blacklist. You can add one now.")
+            else:
+                await update.message.reply_text(f"Current blacklist: {', '.join(blackListSubject)}")
+            await update.message.reply_text("Please send the subject to add to the blacklist.")
+        else:
+            subject = user_input.split()[1]
+            blackListSubject.append(subject)
+            await update.message.reply_text(f"Added '{subject}' to subject blacklist.")
+    elif user_input.startswith("/whitelistsubject"):
+        if len(user_input.split()) < 2:
+            if not whiteListSubject:
+                await update.message.reply_text("No subjects in the whitelist. You can add one now.")
+            else:
+                await update.message.reply_text(f"Current whitelist: {', '.join(whiteListSubject)}")
+            await update.message.reply_text("Please send the subject to add to the whitelist.")
+        else:
+            subject = user_input.split()[1]
+            whiteListSubject.append(subject)
+            await update.message.reply_text(f"Added '{subject}' to subject whitelist.")
     else:
-        response = "Please provide a valid email address."
-
-    await update.message.reply_text(response)
-
-async def user_input_handler_subject(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handler for user input for subject filters."""
-    user_input = update.message.text
-    if not user_input:
-        return
-
-    if update.message.text.startswith("/blacklistsubject"):
-        blackListSubject.append(user_input.split()[1])
-        response = f"Added '{user_input.split()[1]}' to subject blacklist."
-    elif update.message.text.startswith("/whitelistsubject"):
-        whiteListSubject.append(user_input.split()[1])
-        response = f"Added '{user_input.split()[1]}' to subject whitelist."
-    else:
-        response = "Invalid command. Use /blacklistsubject or /whitelistsubject."
-
-    await update.message.reply_text(response)
+        await update.message.reply_text("Invalid command. Use /blacklistsender or /whitelistsender for senders, "
+                                        "/blacklistsubject or /whitelistsubject for subjects.")
 
 async def blacklistsender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for adding a sender to the blacklist."""
-    if not blackListSender:
-        await update.message.reply_text("No senders in the blacklist. You can add one now.")
-    else:
-        await update.message.reply_text(f"Current blacklist: {', '.join(blackListSender)}")
     await update.message.reply_text("Please send the sender's email to add to the blacklist.")
     await user_input_handler(update, context)
 
 async def whitelistsender(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for adding a sender to the whitelist."""
-    if not whiteListSender:
-        await update.message.reply_text("No senders in the whitelist. You can add one now.")
-    else:
-        await update.message.reply_text(f"Current whitelist: {', '.join(whiteListSender)}")
     await update.message.reply_text("Please send the sender's email to add to the whitelist.")
     await user_input_handler(update, context)
 
 async def whitelistsubject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for adding a subject to the whitelist."""
-    if not whiteListSubject:
-        await update.message.reply_text("No subjects in the whitelist. You can add one now.")
-    else:
-        await update.message.reply_text(f"Current whitelist: {', '.join(whiteListSubject)}")
     await update.message.reply_text("Please send the subject to add to the whitelist.")
-    await user_input_handler_subject(update, context)
+    await user_input_handler(update, context)
 
 async def blacklistsubject(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for adding a subject to the blacklist."""
-    if not blackListSubject:
-        await update.message.reply_text("No subjects in the blacklist. You can add one now.")
-    else:
-        await update.message.reply_text(f"Current blacklist: {', '.join(blackListSubject)}")
     await update.message.reply_text("Please send the subject to add to the blacklist.")
-    await user_input_handler_subject(update, context)
+    await user_input_handler(update, context)
 
 async def interval_change(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handler for changing the interval of email checks."""
