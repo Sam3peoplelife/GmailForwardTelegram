@@ -66,7 +66,8 @@ async def handle_list_command(
     user_input: str,
     list_ref: list,
     list_name: str,
-    item_type: str
+    item_type: str,
+    list_command_operation: str
 ):
     if len(user_input.split()) < 2:
         if not list_ref:
@@ -76,12 +77,23 @@ async def handle_list_command(
         await update.message.reply_text(f"Please send the {item_type} to add to the {list_name}.")
     else:
         item = user_input.split(' ', 1)[1]
-        if item not in list_ref:
-            list_ref.append(item)
-            await update.message.reply_text(f"Added '{item}' to {list_name}.")
-            save_user_data()
+        if list_command_operation == "remove":
+            if item in list_ref:
+                list_ref.remove(item)
+                await update.message.reply_text(f"Removed '{item}' from {list_name}.")
+                save_user_data()
+            else:
+                await update.message.reply_text(f"'{item}' is not in {list_name}.")
+        elif list_command_operation == "add":
+            if item not in list_ref:
+                list_ref.append(item)
+                await update.message.reply_text(f"Added '{item}' to {list_name}.")
+                save_user_data()
+            else:
+                await update.message.reply_text(f"'{item}' is already in {list_name}.")
         else:
-            await update.message.reply_text(f"'{item}' is already in {list_name}.")
+            raise ValueError("Invalid list command operation. Use 'add' or 'remove'.")
+        
 
 async def user_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message or not update.message.text:
@@ -107,13 +119,21 @@ async def user_input_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif user_input.startswith("/authCode"):
         await update.message.reply_text("You are already authenticated. No need to use /authCode again.")
     elif user_input.startswith("/blacklistsender"):
-        await handle_list_command(update, user_input, user_lists["blackListSender"], "blacklist", "sender's email")
+        await handle_list_command(update, user_input, user_lists["blackListSender"], "blacklist", "sender's email", "add")
     elif user_input.startswith("/whitelistsender"):
-        await handle_list_command(update, user_input, user_lists["whiteListSender"], "whitelist", "sender's email")
+        await handle_list_command(update, user_input, user_lists["whiteListSender"], "whitelist", "sender's email", "add")
     elif user_input.startswith("/blacklistsubject"):
-        await handle_list_command(update, user_input, user_lists["blackListSubject"], "blacklist", "subject")
+        await handle_list_command(update, user_input, user_lists["blackListSubject"], "blacklist", "subject", "add")
     elif user_input.startswith("/whitelistsubject"):
-        await handle_list_command(update, user_input, user_lists["whiteListSubject"], "whitelist", "subject")
+        await handle_list_command(update, user_input, user_lists["whiteListSubject"], "whitelist", "subject", "add")
+    elif user_input.startswith("/blacklistsenderremove"):
+        await handle_list_command(update, user_input, user_lists["blackListSender"], "blacklist", "sender's email", "remove")
+    elif user_input.startswith("/whitelistsenderremove"):
+        await handle_list_command(update, user_input, user_lists["whiteListSender"], "whitelist", "sender's email", "remove")
+    elif user_input.startswith("/blacklistsubjectremove"):
+        await handle_list_command(update, user_input, user_lists["blackListSubject"], "blacklist", "subject", "remove")
+    elif user_input.startswith("/whitelistsubjectremove"):
+        await handle_list_command(update, user_input, user_lists["whiteListSubject"], "whitelist", "subject", "remove")
     else:
         await update.message.reply_text(
             "Invalid command. Use /blacklistsender, /whitelistsender, /blacklistsubject, /whitelistsubject, or /setinterval."
